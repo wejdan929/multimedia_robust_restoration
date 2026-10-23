@@ -2,8 +2,9 @@ import streamlit as st
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
+from scipy.io import wavfile
 
-# --- MODULES EMBARQUÉS (Zéro erreur d'importation) ---
+# --- MODULES EMBARQUÉS ---
 
 def median_filter_2d(image, kernel_size=3):
     return cv2.medianBlur(image, kernel_size)
@@ -71,21 +72,33 @@ with tab1:
     col1, col2 = st.columns(2)
     
     with col1:
+        # Ajout du bouton d'importation d'image
+        uploaded_image = st.file_uploader("Importer une image personnalisée (PNG, JPG)", type=["png", "jpg", "jpeg"])
         noise_level = st.slider("Densité de bruit Sel & Poivre", 0.0, 0.3, 0.05, 0.01)
         kernel_size = st.select_slider("Taille du noyau (Filtre Médian)", options=[3, 5, 7], value=3)
         
         img_size = 256
-        img = np.zeros((img_size, img_size), dtype=np.uint8)
-        cv2.rectangle(img, (30, 30), (220, 220), 255, -1)
-        cv2.circle(img, (128, 128), 60, 0, -1)
-        cv2.line(img, (0, 0), (256, 256), 127, 5)
+        if uploaded_image is not None:
+            file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+            img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                img = cv2.resize(img, (img_size, img_size))
+            else:
+                img = np.zeros((img_size, img_size), dtype=np.uint8)
+        else:
+            # Mire de définition par défaut
+            img = np.zeros((img_size, img_size), dtype=np.uint8)
+            cv2.rectangle(img, (30, 30), (220, 220), 255, -1)
+            cv2.circle(img, (128, 128), 60, 0, -1)
+            cv2.line(img, (0, 0), (256, 256), 127, 5)
         
         noisy_img = img.copy()
         num_noise = int(noise_level * img.size)
-        coords_salt = [np.random.randint(0, i - 1, int(num_noise / 2)) for i in img.shape]
-        noisy_img[tuple(coords_salt)] = 255
-        coords_pepper = [np.random.randint(0, i - 1, int(num_noise / 2)) for i in img.shape]
-        noisy_img[tuple(coords_pepper)] = 0
+        if num_noise > 0:
+            coords_salt = [np.random.randint(0, i - 1, int(num_noise / 2)) for i in img.shape]
+            noisy_img[tuple(coords_salt)] = 255
+            coords_pepper = [np.random.randint(0, i - 1, int(num_noise / 2)) for i in img.shape]
+            noisy_img[tuple(coords_pepper)] = 0
         
         restored_img = median_filter_2d(noisy_img, kernel_size=kernel_size)
         
@@ -101,11 +114,32 @@ with tab1:
 
 with tab2:
     st.header("Traitement & Filtrage Audio")
+    # Ajout du bouton d'importation audio
+    uploaded_audio = st.file_uploader("Importer un fichier audio (WAV optionnel)", type=["wav"])
     audio_noise = st.slider("Amplitude du Bruit Audio", 0.0, 0.5, 0.1, 0.02)
     window_size = st.slider("Taille de Fenêtre (Moyenne Mobile)", 3, 21, 5, step=2)
     
-    t = np.linspace(0, 1, 1000)
-    clean_signal = np.sin(2 * np.pi * 5 * t) + 0.5 * np.sin(2 * np.pi * 12 * t)
+    if uploaded_audio is not None:
+        try:
+            rate, data_audio = wavfile.read(uploaded_audio)
+            if data_audio.ndim > 1:
+                data_audio = data_audio[:, 0]
+            clean_signal = data_audio.astype(float)
+            if len(clean_signal) > 1000:
+                indices = np.linspace(0, len(clean_signal) - 1, 1000, dtype=int)
+                clean_signal = clean_signal[indices]
+            max_val = np.max(np.abs(clean_signal))
+            if max_val > 0:
+                clean_signal = clean_signal / max_val
+            t = np.linspace(0, 1, len(clean_signal))
+        except Exception as e:
+            st.error(f"Erreur lors de la lecture du fichier audio : {e}")
+            t = np.linspace(0, 1, 1000)
+            clean_signal = np.sin(2 * np.pi * 5 * t) + 0.5 * np.sin(2 * np.pi * 12 * t)
+    else:
+        t = np.linspace(0, 1, 1000)
+        clean_signal = np.sin(2 * np.pi * 5 * t) + 0.5 * np.sin(2 * np.pi * 12 * t)
+        
     noise = np.random.normal(0, audio_noise, len(t))
     noisy_signal = clean_signal + noise
     restored_signal = moving_average_1d(noisy_signal, window_size=window_size)
@@ -118,9 +152,9 @@ with tab2:
     col_b.metric("SNR Signal Restauré", f"{snr_restored:.2f} dB", delta=f"{snr_restored - snr_noisy:+.2f} dB")
     
     fig, ax = plt.subplots(figsize=(10, 3))
-    ax.plot(t[:200], clean_signal[:200], label="Original", alpha=0.7)
-    ax.plot(t[:200], noisy_signal[:200], label="Bruité", alpha=0.5)
-    ax.plot(t[:200], restored_signal[:200], label="Restauré", color="red")
+    ax.plot(t, clean_signal, label="Original", alpha=0.7)
+    ax.plot(t, noisy_signal, label="Bruité", alpha=0.5)
+    ax.plot(t, restored_signal, label="Restauré", color="red")
     ax.legend()
     st.pyplot(fig)
 
